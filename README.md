@@ -1,3 +1,3 @@
 # SXNB
 
-#Simple Xmpp Notifying Bot
+Simple Xmpp Notifying Bot
