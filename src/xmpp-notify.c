@@ -1,57 +1,17 @@
-
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <strophe.h>
 
+#include "type.h"
+#include "handler.h"
+
 #define OPT_STRING "j:p:m:C:M:P:"
 
-#define STANZA_NAME_X "x"
-#define STANZA_NS_MUC "http://jabber.org/protocol/muc"
-
-typedef struct ConnInfo {
-	xmpp_ctx_t *ctx;
-	char **chatrooms;
-	char **chatroomsNick;
-	char **chats;
-	char *msg;
-	int chatroomsNum;
-	int chatsNum;
-} connInfo;
-
-
-xmpp_stanza_t*
-stanza_create_room_join_presence(xmpp_ctx_t* const ctx,
-                                 const char* const full_room_jid, const char* const passwd){
-	xmpp_stanza_t* presence = xmpp_presence_new(ctx);
-	xmpp_stanza_set_to(presence, full_room_jid);
-    /* _stanza_add_unique_id(presence); */
-	xmpp_stanza_set_id(presence, xmpp_uuid_gen(ctx));
-
-    xmpp_stanza_t* x = xmpp_stanza_new(ctx);
-    xmpp_stanza_set_name(x, STANZA_NAME_X);
-    xmpp_stanza_set_ns(x, STANZA_NS_MUC);
-
-    if (passwd) {
-        xmpp_stanza_t* pass = xmpp_stanza_new(ctx);
-        xmpp_stanza_set_name(pass, "password");
-        xmpp_stanza_t* text = xmpp_stanza_new(ctx);
-        xmpp_stanza_set_text(text, passwd);
-        xmpp_stanza_add_child(pass, text);
-        xmpp_stanza_add_child(x, pass);
-        xmpp_stanza_release(text);
-        xmpp_stanza_release(pass);
-    }
-
-    xmpp_stanza_add_child(presence, x);
-    xmpp_stanza_release(x);
-
-    return presence;
-}
 
 int
-parse_arg(int argc, char** argv, char ***chatrooms, char ***chats, char **msg,
+parse_arg(int argc, char** argv, xmpp_ctx_t *ctx, char ***chatrooms, char ***chats, char **msg,
            int *chatroomsNum, int *chatsNum, char **jid, char **passwd, int *port)
 {
 	int c;
@@ -162,67 +122,6 @@ parse_arg(int argc, char** argv, char ***chatrooms, char ***chats, char **msg,
 }
 
 
-void
-conn_handler_message_on_connect(xmpp_conn_t *conn,
-                            xmpp_conn_event_t status,
-                            int error,
-                            xmpp_stream_error_t *stream_error,
-                            void *userdata)
-{
-	const connInfo *const info = (connInfo*)userdata;
-	const char *const uuid = xmpp_uuid_gen(info->ctx);
-	xmpp_stanza_t *stanza;
-	const char *chatName;
-	char *chatroomPresence;
-	const char *const jidNode = xmpp_jid_node(info->ctx, xmpp_conn_get_jid(conn));
-	int i;
-
-	(void)error;
-	(void)stream_error;
-
-	if (status == XMPP_CONN_CONNECT) {
-		stanza = xmpp_presence_new(info->ctx);
-		xmpp_send(conn, stanza);
-		xmpp_stanza_release(stanza);
-
-		if (info->chatrooms){
-			for(i = 0; i < info->chatroomsNum; ++i){
-				chatName = *(info->chatrooms + i);
-
-				chatroomPresence = (char*)malloc(sizeof(char)
-                                   * (strlen(jidNode) + strlen(chatName)) + 2);
-				strcpy(chatroomPresence, chatName);
-				strcat(chatroomPresence, "/");
-				strcat(chatroomPresence, jidNode);
-
-				stanza = stanza_create_room_join_presence(info->ctx,
-                                                          chatroomPresence, NULL);
-				xmpp_send(conn, stanza);
-				xmpp_stanza_release(stanza);
-				free(chatroomPresence);
-
-				stanza = xmpp_message_new(info->ctx, "groupchat", chatName, uuid);
-				xmpp_message_set_body(stanza, info->msg);
-				xmpp_send(conn, stanza);
-				xmpp_stanza_release(stanza);
-			}
-		}
-
-		if (info->chats){
-			for(i = 0; i < info->chatsNum; ++i){
-				stanza = xmpp_message_new(info->ctx, "chat", *(info->chats + i), uuid);
-				xmpp_message_set_body(stanza, info->msg);
-				xmpp_send(conn, stanza);
-				xmpp_stanza_release(stanza);
-			}
-		}
-		xmpp_disconnect(conn);
-	} else
-		xmpp_stop(info->ctx);
-}
-
-
-
 int
 main(int argc, char** argv)
 {
@@ -232,24 +131,29 @@ main(int argc, char** argv)
 	connInfo info;
 	char *jid, *pass;
 	int port = 5222;
+	xmpp_initialize();
+	/* log = xmpp_get_default_logger(XMPP_LEVEL_DEBUG); */
+	info.ctx = xmpp_ctx_new(NULL, NULL);
 
-	if (parse_arg(argc, argv, &info.chatrooms, &info.chats,
+	if (parse_arg(argc, argv, info.ctx, &info.chatrooms, &info.chats,
                   &info.msg, &info.chatroomsNum, &info.chatsNum,
 				  &jid, &pass, &port) > 0) {
 
-		xmpp_initialize();
-		/* log = xmpp_get_default_logger(XMPP_LEVEL_DEBUG); */
-		info.ctx = xmpp_ctx_new(NULL, NULL);
 		conn = xmpp_conn_new(info.ctx);
 
 		xmpp_conn_set_jid(conn, jid);
 		xmpp_conn_set_pass(conn, pass);
 
-		xmpp_connect_client(conn, NULL, port, conn_handler_message_on_connect, &info);
-		xmpp_run(info.ctx);
+		if(xmpp_connect_client(conn, NULL, port, conn_handler_message_on_connect, &info) >= 0) {
+			xmpp_run(info.ctx);
 
-		xmpp_ctx_free(info.ctx);
-		xmpp_shutdown();
+			xmpp_ctx_free(info.ctx);
+			xmpp_shutdown();
+			return 0;
+		} else {
+			fprintf(stderr, "connection failed");
+			return -1;
+		}
 
 	} else {
 		return -1;
