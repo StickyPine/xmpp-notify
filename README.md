@@ -1,6 +1,6 @@
 # xmpp-notify
 
-POSIX compliant CLI program to easly send xmpp messages.
+POSIX compliant CLI program to easily send xmpp messages.
 
 !! Still a draft !!
 
